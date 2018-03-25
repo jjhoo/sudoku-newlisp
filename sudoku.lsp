@@ -115,9 +115,122 @@
        (filter (fn (cell) (= pos (nth 0 cell))) cands)))
 
 (context MAIN)
+
+(context 'dogen)
+(define-macro (dogen:dogen)
+  ;; (println (cons 'begin (1 (args))))
+  (letex (var  (args 0 0)
+          gen  (args 0 1)
+          body (cons 'begin (1 (args))))
+    (while (catch (gen) 'var)
+      body)))
+
+(context MAIN)
+
+(context 'list-gen)
+
+(define (list-gen:init lst)
+  (let (n (length lst))
+    (set
+     'list-gen:items (array n lst)
+     'list-gen:i 0
+     'list-gen:end n)
+    list-gen:next))
+
+(define (list-gen:next)
+  (if (catch (nth list-gen:i list-gen:items) 'res)
+      (begin
+        (++ list-gen:i)
+        res)
+      (throw-error res)))
+
+(context MAIN)
+(context 'combinations-gen)
+
+; Knuth, algorithm T
+(define (combinations-gen:init multiset koo)
+  (let (n (length multiset))
+    (if (<= n koo)
+        (list-gen:init (list multiset))
+        (begin
+          (set 'combinations-gen:items (array n multiset)
+               'combinations-gen:j koo
+               'combinations-gen:k koo
+               'combinations-gen:cjs (map (fn (j) (- j 1)) (sequence 0 koo))
+               'combinations-gen:continue true
+               'combinations-gen:visit true)
+          (push n combinations-gen:cjs -1)
+          (push 0 combinations-gen:cjs -1)
+          combinations-gen:next))))
+
+(define (combinations-gen:visitfun)
+  (set 'combinations-gen:visit nil)
+  (map (fn (i)
+         (nth i combinations-gen:items))
+       (slice combinations-gen:cjs 1 combinations-gen:k)))
+
+(define (combinations-gen:next)
+  (unless (or combinations-gen:items
+              combinations-gen:continue)
+    (throw-error "generator exhausted"))
+  (cond
+   (combinations-gen:visit (combinations-gen:visitfun))
+   ((> combinations-gen:j 0)
+    (begin ;; T6
+      ;; (println "T6")
+      (set 'x combinations-gen:j)
+      (setf (nth combinations-gen:j combinations-gen:cjs) x)
+      (-- combinations-gen:j)
+      (combinations-gen:visitfun)))
+   ;; (println "T3: j=" j ", x=" x ", cjs=" cjs)
+   ((< (+ (nth 1 combinations-gen:cjs) 1) (nth 2 combinations-gen:cjs))
+    (begin
+      (setf (nth 1 combinations-gen:cjs)
+            (+ (nth 1 combinations-gen:cjs) 1))
+      (combinations-gen:visitfun)))
+   (true
+    (begin
+      (set 'combinations-gen:j 2)
+      ;; (println "T4: j=" j ", x=" x ", cjs=" cjs)
+      (let (cont true)
+        (while cont
+          (setf (nth (- combinations-gen:j 1) combinations-gen:cjs)
+                (- combinations-gen:j 2))
+          (set 'x (+ (nth combinations-gen:j combinations-gen:cjs) 1))
+          (if (= x (nth (+ combinations-gen:j 1) combinations-gen:cjs))
+              (++ combinations-gen:j)
+              (set 'cont nil))))
+      ;; (println "T5: j " j ", k " k ", x " x ", cjs " cjs)
+      (if (> combinations-gen:j combinations-gen:k)
+          (throw-error "generator exhausted")
+          (begin
+            ;; T6
+            ;; (println "T6: j " j ", k " k ", x " x ", cjs " cjs)
+            (setf (nth combinations-gen:j combinations-gen:cjs) x)
+            (-- combinations-gen:j)
+            (set 'combinations-gen:visit true)
+            (combinations-gen:visitfun)))))))
+
+(context MAIN)
+(context 'permutations-gen)
+
+(define (permutations-gen:init items)
+  (let (ilen (length items))
+    (set 'permutations-gen:items (array ilen items)
+         'permutations-gen:ajs (map (fn (j) (- j 1)) (sequence 0 ilen))
+         'permutations-gen:n ilen
+         'permutations-gen:continue true
+         'permutations-gen:visit true)
+    permutations-gen:next))
+
+(define (permutations-gen:next)
+
+  )
+
+(context MAIN)
 (context 'sudoku)
 
-(define (sudoku:str-to-solved s)
+(define (str-to-solved s)
   (let (i 1 j 1 solved '())
     (dolist (c (explode s))
       (if (!= (int c) 0)
@@ -271,18 +384,19 @@
   (if (< (length (unique-positions cands)) (+ limit 1))
       (throw '()))
   (letn ((found '())
-         (nums (numbers cands))
-         (ncounts (number-counts nums))
+         (ncounts (number-counts (numbers cands)))
          (unums (unique (sort (map (curry nth 0) ncounts))))
-         (combs (combinations limit unums)))
+         (gen (combinations-gen:init unums limit)))
     ;; now find if 'limit' count of cells contain a naked group
       ;; of 'limit' count of numbers
     ;; (println "Combos (" limit ") >> " combs " << for cands >> " cands)
-    (dolist (nums combs)
-      (letn ((foos (find-cells-cond (fn (numbers)
-                                      (or (= nums numbers)
-                                          (empty? (difference numbers nums))))
-                                    cands)))
+    (dogen (nums gen)
+      (let ((foos (find-cells-cond (fn (numbers)
+                                     (or (= nums numbers)
+                                         (empty? (difference numbers nums))))
+                                   cands)))
+        ;; (println "Combo is " nums)
+        ;; (println "Combo is " generator:current)
         (if (= (length foos) limit)
             (letn ((positions (map (curry nth 0) foos)))
               ;; (println "Found something? " nums " " foos)
@@ -314,14 +428,15 @@
                                              (<= len limit)))
                                       nums))
          (unums (unique (sort (map (curry nth 0) ncounts)))))
-    ;; (println "Unums " unums ", ncounts " ncounts)
+    ;; (println "nums " nums ", unums " unums ", ncounts " ncounts ")
     (if (< (length unums) limit)
         (throw '()))
 
     ;; now find if a limited number of cells contain a certain hidden group
-    (let (combs (combinations limit unums))
-      ;; (println "Combos (" limit ") >> " combs " << for cands >> " cands)
-      (dolist (nums combs)
+    (let (gen (combinations-gen:init unums limit))
+      (dogen (nums gen)
+        ;; (println nums)
+        ;; (println "Combos (" limit ") >> " generator:current " << for cands >> " cands)
         (letn ((ncands (clean (fn (cell)
                                 (not (find (scand:cell-value cell) nums)))
                               cands))
@@ -345,7 +460,7 @@
                                                   positions)))
                                      cands))))))))
     found))
-              ;; (let (cell-nums (unique-numbers ncands))
+;; (let (cell-nums (unique-numbers ncands))
               ;;   (println "Cells for combo (" limit ")\n\t" nums "\n\t" cell-nums "\n\t" cells "\n\t" cands)
               ;;   ;; (println "Too many cells: nums " nums ", cells " cells)
               ;;   ))))))
@@ -534,37 +649,42 @@
                                                        (find n (nth 1 n-cell)))
                                                      comb))))
                         numbers)))))
-       (combs (filter good-comb-fun (combinations 3 pairs))))
+       (gen (combinations-gen:init pairs 3)))
+    ;; (combs (filter good-comb-fun (combinations 3 pairs))))
     ;; (println "Pairs " pairs)
     ;; (println "Combinations for " (length pairs)
     ;;           " pairs, filtered combinations " (length combs))
     ;; (println "    " combs)
-    (dolist (comb combs)
-      (dolist (perm (map (fn (c) (map (fn (i) (nth i comb)) c))
-                         ;; just listing 6 possible permutations might
-                         ;; not be good style.
-                         (list (list 0 1 2) (list 0 2 1)
-                               (list 1 0 2) (list 1 2 0)
-                               (list 2 0 1) (list 2 1 0))))
-        (let ((wing1 (nth 0 perm))
-              (pivot (nth 1 perm))
-              (wing2 (nth 2 perm)))
-          (if (is-ywing? pivot wing1 wing2)
-              (letn ((n (first (intersect (nth 1 wing1) (nth 1 wing2))))
-                     (poss (map (curry nth 0) (list pivot wing1 wing2)))
-                     (xs (filter (fn (cell)
-                                   (let (pos (scand:cell-pos cell))
-                                     (and (= n (scand:cell-value cell))
-                                          (not (find pos poss))
-                                          (scand:sees? (nth 0 wing1) pos)
-                                          (scand:sees? (nth 0 wing2) pos))))
-                                 cands)))
-                (if (not (empty? xs))
-                    (set 'found (append found xs)))))
-          ;; (println "Is a y-wing perm! " wing1 " - " pivot " - " wing2)
-          ;; (println "   maybe eliminate (" n ") << " xs " >> of << " cands)
-          ;; (println " c       " perm)))
-          )))
+    (dogen (comb gen)
+      (if (good-comb-fun comb)
+          (begin
+            (dolist (perm (map (fn (c) (map (fn (i) (nth i comb)) c))
+                               ;; just listing 6 possible permutations might
+                               ;; not be good style.
+                               (list (list 0 1 2) (list 0 2 1)
+                                     (list 1 0 2) (list 1 2 0)
+                                     (list 2 0 1) (list 2 1 0))))
+              (let ((wing1 (nth 0 perm))
+                    (pivot (nth 1 perm))
+                    (wing2 (nth 2 perm)))
+                (if (is-ywing? pivot wing1 wing2)
+                    (letn ((n (first (intersect (nth 1 wing1)
+                                                (nth 1 wing2))))
+                           (poss (map (curry nth 0)
+                                      (list pivot wing1 wing2)))
+                           (xs (filter (fn (cell)
+                                         (let (pos (scand:cell-pos cell))
+                                           (and (= n
+                                                   (scand:cell-value cell))
+                                                (not (find pos poss))
+                                                (scand:sees? (nth 0 wing1) pos)
+                                                (scand:sees? (nth 0 wing2) pos))))
+                                       cands)))
+                      (if (not (empty? xs))
+                          (set 'found (append found xs))))))))))
+    ;; (println "Is a y-wing perm! " wing1 " - " pivot " - " wing2)
+    ;; (println "   maybe eliminate (" n ") << " xs " >> of << " cands)
+    ;; (println " c       " perm)))
     (list '() found)))
 
 (define (update-solved found solved)
@@ -605,7 +725,7 @@
                   (set 'osolved (copy solved))
                   (set 'ocands (copy cands))
                   (let (res (f solved cands))
-                    (println "res 1 " res)
+                    ;; (println "res 1 " res)
                     (if (not (empty? (nth 0 res)))
                         (silent
                          (set 'solved (update-solved (nth 0 res) solved))
@@ -616,7 +736,7 @@
                          (println "Removed candidates 1 "
                                   (difference ocands cands))
                          (throw (not (empty? cands)))))
-                    (println "res 2")
+                    ;; (println "res 2")
                     (if (not (empty? (nth 1 res)))
                         (silent
                          (set 'cands (update-candidates (nth 1 res) cands))
