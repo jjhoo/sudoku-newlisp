@@ -122,8 +122,11 @@
   (letex (var  (args 0 0)
           gen  (args 0 1)
           body (cons 'begin (1 (args))))
-    (while (catch (gen) 'var)
-      body)))
+    (let (ngen (if (lambda? gen)
+                   gen
+                   (eval gen)))
+      (while (catch (ngen) 'var)
+        body))))
 
 (context MAIN)
 
@@ -157,7 +160,6 @@
                'combinations-gen:j koo
                'combinations-gen:k koo
                'combinations-gen:cjs (map (fn (j) (- j 1)) (sequence 0 koo))
-               'combinations-gen:continue true
                'combinations-gen:visit true)
           (push n combinations-gen:cjs -1)
           (push 0 combinations-gen:cjs -1)
@@ -170,9 +172,8 @@
        (slice combinations-gen:cjs 1 combinations-gen:k)))
 
 (define (combinations-gen:next)
-  (unless (or combinations-gen:items
-              combinations-gen:continue)
-    (throw-error "generator exhausted"))
+  (if (nil? combinations-gen:items)
+      (throw-error "generator exhausted"))
   (cond
    (combinations-gen:visit (combinations-gen:visitfun))
    ((> combinations-gen:j 0)
@@ -202,7 +203,10 @@
               (set 'cont nil))))
       ;; (println "T5: j " j ", k " k ", x " x ", cjs " cjs)
       (if (> combinations-gen:j combinations-gen:k)
-          (throw-error "generator exhausted")
+          (begin
+            (set 'combinations-gen:items nil
+                 'combinations-gen:cjs nil)
+            (throw-error "generator exhausted"))
           (begin
             ;; T6
             ;; (println "T6: j " j ", k " k ", x " x ", cjs " cjs)
@@ -214,18 +218,61 @@
 (context MAIN)
 (context 'permutations-gen)
 
-(define (permutations-gen:init items)
-  (let (ilen (length items))
-    (set 'permutations-gen:items (array ilen items)
-         'permutations-gen:ajs (map (fn (j) (- j 1)) (sequence 0 ilen))
+(define (permutations-gen:visitfun)
+  (set 'permutations-gen:visit nil)
+  ;; (println "Visit")
+  (map (fn (i)
+         (nth i permutations-gen:items))
+       (slice permutations-gen:ajs 1 permutations-gen:n)))
+
+(define (permutations-gen:init setti)
+  (let (ilen (length setti))
+    (set 'permutations-gen:items (array ilen setti)
+         'permutations-gen:ajs (sequence 0 ilen)
          'permutations-gen:n ilen
-         'permutations-gen:continue true
          'permutations-gen:visit true)
+    (push 0 permutations-gen:ajs 0)
     permutations-gen:next))
 
 (define (permutations-gen:next)
-
-  )
+  (cond
+   ;; L1
+   (permutations-gen:visit (permutations-gen:visitfun))
+   (true
+    (begin
+      ;; (println "L2")
+      ;; L2
+      (set 'j (- permutations-gen:n 1))
+      (let (cont true)
+        (while cont
+          (cond ((>= (nth j permutations-gen:ajs)
+                     (nth (+ j 1) permutations-gen:ajs))
+                 (-- j))
+                ((< (nth j permutations-gen:ajs)
+                    (nth (+ j 1) permutations-gen:ajs))
+                 (set 'cont nil))
+                ((= j 0) (set 'cont nil)))))
+      (if (= j 0) (throw-error "generator exhausted"))
+      ;; L3
+      ;; (println "L3 j=" j)
+      (set 'l permutations-gen:n)
+      (if (>= (nth j permutations-gen:ajs) (nth l permutations-gen:ajs))
+          (let (cont true)
+            (while cont
+              (-- l)
+              (if (< (nth j permutations-gen:ajs) (nth l permutations-gen:ajs))
+                  (set 'cont nil)))))
+      (swap (nth j permutations-gen:ajs) (nth l permutations-gen:ajs))
+      ;; L4
+      ;; (println "L4")
+      (set 'k (+ j 1))
+      (set 'l permutations-gen:n)
+      (while (< k l)
+        (swap (nth k permutations-gen:ajs)
+              (nth l permutations-gen:ajs))
+        (++ k)
+        (-- l))
+      (permutations-gen:visitfun)))))
 
 (context MAIN)
 (context 'sudoku)
@@ -385,12 +432,11 @@
       (throw '()))
   (letn ((found '())
          (ncounts (number-counts (numbers cands)))
-         (unums (unique (sort (map (curry nth 0) ncounts))))
-         (gen (combinations-gen:init unums limit)))
+         (unums (unique (sort (map (curry nth 0) ncounts)))))
     ;; now find if 'limit' count of cells contain a naked group
       ;; of 'limit' count of numbers
     ;; (println "Combos (" limit ") >> " combs " << for cands >> " cands)
-    (dogen (nums gen)
+    (dogen (nums (combinations-gen:init unums limit))
       (let ((foos (find-cells-cond (fn (numbers)
                                      (or (= nums numbers)
                                          (empty? (difference numbers nums))))
@@ -433,8 +479,8 @@
         (throw '()))
 
     ;; now find if a limited number of cells contain a certain hidden group
-    (let (gen (combinations-gen:init unums limit))
-      (dogen (nums gen)
+    (begin
+      (dogen (nums (combinations-gen:init unums limit))
         ;; (println nums)
         ;; (println "Combos (" limit ") >> " generator:current " << for cands >> " cands)
         (letn ((ncands (clean (fn (cell)
@@ -658,15 +704,12 @@
     (dogen (comb gen)
       (if (good-comb-fun comb)
           (begin
-            (dolist (perm (map (fn (c) (map (fn (i) (nth i comb)) c))
-                               ;; just listing 6 possible permutations might
-                               ;; not be good style.
-                               (list (list 0 1 2) (list 0 2 1)
-                                     (list 1 0 2) (list 1 2 0)
-                                     (list 2 0 1) (list 2 1 0))))
+            ;; (println " comb " comb)
+            (dogen (perm (permutations-gen:init comb))
               (let ((wing1 (nth 0 perm))
                     (pivot (nth 1 perm))
                     (wing2 (nth 2 perm)))
+                ;; (println " perm " perm)
                 (if (is-ywing? pivot wing1 wing2)
                     (letn ((n (first (intersect (nth 1 wing1)
                                                 (nth 1 wing2))))
@@ -774,5 +817,9 @@
 ;; (println (scand:get-row 1 solved))
 ;; (println (scand:get-col 1 solved))
 ;; (println (scand:get-box 1 solved))
+
+;; (set 'gen (permutations-gen:init '(1 2 3)))
+;; (dogen (perm gen)
+;;        (println "perm " perm))
 
 (context MAIN)
